@@ -1,0 +1,26 @@
+[project]
+name = "vhs-course-monitor"
+version = "0.1.0"
+description = "Script to search and monitor new courses on vhsit.berlin.de"
+readme = "README.md"
+authors = [
+  { name = "Your Name", email = "you@example.com" }
+]
+license = "MIT"
+requires-python = ">=3.10"
+dependencies = [
+  "requests",
+  "beautifulsoup4",
+  "python-dotenv",
+]
+
+[tool.uv]
+dev-dependencies = [
+  "black",
+  "ruff",
+  "pytest",
+]
+
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
