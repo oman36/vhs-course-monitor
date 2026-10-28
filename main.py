@@ -1,108 +1,124 @@
+import logging
 import os
+import re
 import time
-from threading import Lock
+
+import requests
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
-import requests
+from threading import Lock
 
-# Загружаем переменные окружения из .env файла
 load_dotenv()
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="[%(asctime)s] %(name)s %(levelname)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger(__name__)
 
 
 class CodeStorage:
-    """Класс для работы с хранением кодов курсов."""
+    """Stores course codes."""
 
     def __init__(self, filename="course_codes.txt"):
         self.filename = filename
         self._codes = self._load()
 
     def _load(self):
-        """Загружает сохраненные коды курсов из файла."""
+        """Loads saved course codes from a file."""
         if not os.path.exists(self.filename):
-            return set()
+            return {}
         try:
             with open(self.filename, "r", encoding="utf-8") as f:
-                return set(line.strip() for line in f if line.strip())
+                codes = {}
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        if "|" in line:
+                            code, date = line.split("|")
+                            codes[code] = date
+                        else:
+                            codes[line] = ""
+                return codes
         except Exception as e:
-            print(f"⚠️  Ошибка при загрузке кодов курсов: {e}")
-            return set()
+            logger.error("Error loading course codes: %s", e)
+            return {}
 
     def exists(self, code):
-        """Проверяет, существует ли код."""
+        """Checks whether a code exists."""
         return code in self._codes
 
     def add(self, code):
-        """Добавляет код в память."""
-        self._codes.add(code)
+        """Adds a code to memory."""
+        self._codes.setdefault(code, time.strftime("%d.%m.%Y %H:%M:%S"))
 
     def save(self):
-        """Сохраняет все коды в файл."""
+        """Saves all codes to a file."""
         try:
             with open(self.filename, "w", encoding="utf-8") as f:
-                for code in sorted(self._codes):
-                    f.write(f"{code}\n")
-            print(f"✅ Сохранено {len(self._codes)} кодов курсов в {self.filename}")
+                for code, date in self._codes.items():
+                    f.write(f"{code}|{date}\n")
+            logger.info(
+                "Saved %s course codes to %s", len(self._codes), self.filename
+            )
         except Exception as e:
-            print(f"❌ Ошибка при сохранении кодов курсов: {e}")
+            logger.error("Error saving course codes: %s", e)
 
 
 class RateLimiter:
-    """Семафор для ограничения частоты отправки сообщений."""
+    """Semaphore for limiting the message sending rate."""
 
     def __init__(self, is_group=False):
         """
-        Инициализирует rate limiter.
+        Initializes the rate limiter.
 
         Args:
-            is_group: True для групп (20 сообщений в минуту), False для личных чатов (1 сообщение в секунду)
+            is_group: True for groups (10 messages per minute), False for private chats (1 message per second)
         """
         self._lock = Lock()
         self._is_group = is_group
 
         if self._is_group:
-            # Группа: не более 20 сообщений в минуту
-            self._max_messages_per_minute = 20
+            self._max_messages_per_minute = 10
             self._window_seconds = 60.0
-            self._message_timestamps = (
-                []
-            )  # Очередь временных меток отправленных сообщений
+            self._message_timestamps = []
         else:
-            # Личный чат: не более 1 сообщения в секунду
             self._min_interval = 1.0
             self._last_send_time = 0
 
     def acquire(self):
         """
-        Блокирует выполнение, если необходимо, чтобы соблюсти rate limits.
-        Должен вызываться перед отправкой сообщения.
+        Blocks execution if necessary to comply with rate limits.
+        Must be called before sending a message.
         """
         with self._lock:
             current_time = time.time()
 
             if self._is_group:
-                # Для групп: проверяем скользящее окно в 1 минуту
-                # Удаляем временные метки старше 1 минуты
+                # For groups: check a rolling one-minute window
+                # Remove timestamps older than one minute
                 cutoff_time = current_time - self._window_seconds
                 self._message_timestamps = [
                     ts for ts in self._message_timestamps if ts > cutoff_time
                 ]
 
-                # Если в последнюю минуту уже отправлено 20 сообщений, ждем
+                # Wait if the message limit for the last minute has been reached
                 if len(self._message_timestamps) >= self._max_messages_per_minute:
-                    # Ждем, пока не пройдет минута с момента самого старого сообщения
+                    # Wait until one minute has passed since the oldest message
                     oldest_timestamp = self._message_timestamps[0]
                     wait_time = self._window_seconds - (current_time - oldest_timestamp)
                     if wait_time > 0:
                         time.sleep(wait_time)
-                        # Обновляем время после ожидания
+                        # Update the time after waiting
                         current_time = time.time()
-                        # Еще раз очищаем старые метки
+                        # Remove old timestamps again
                         cutoff_time = current_time - self._window_seconds
                         self._message_timestamps = [
                             ts for ts in self._message_timestamps if ts > cutoff_time
                         ]
             else:
-                # Для личных чатов: простая проверка интервала
+                # For private chats: a simple interval check
                 time_since_last_send = current_time - self._last_send_time
                 if time_since_last_send < self._min_interval:
                     sleep_time = self._min_interval - time_since_last_send
@@ -111,8 +127,8 @@ class RateLimiter:
 
     def record(self):
         """
-        Записывает факт отправки сообщения.
-        Должен вызываться после успешной отправки сообщения.
+        Records that a message was sent.
+        Must be called after a message is sent successfully.
         """
         with self._lock:
             send_time = time.time()
@@ -123,48 +139,53 @@ class RateLimiter:
 
 
 class Telegram:
-    """Класс для отправки сообщений в Telegram с умным rate limiting."""
+    """Sends Telegram messages with adaptive rate limiting."""
 
     def __init__(self, bot_token=None, chat_id=None):
         self.bot_token = bot_token or os.getenv("TELEGRAM_BOT_TOKEN")
         self.chat_id = chat_id or os.getenv("TELEGRAM_CHAT_ID")
 
-        # Определяем тип чата: отрицательный chat_id = группа
+        # Determine the chat type: a negative chat_id indicates a group
         try:
             chat_id_int = int(self.chat_id) if self.chat_id else 0
             is_group = chat_id_int < 0
         except (ValueError, TypeError):
             is_group = False
 
-        # Создаем rate limiter в зависимости от типа чата
+        # Create a rate limiter based on the chat type
         self._rate_limiter = RateLimiter(is_group=is_group)
 
     def send(self, message):
-        """Отправляет сообщение в Telegram с соблюдением rate limits."""
+        """Sends a Telegram message while respecting rate limits."""
         if not self.bot_token or not self.chat_id:
             raise ValueError(
-                "Telegram не настроен: отсутствует TELEGRAM_BOT_TOKEN или TELEGRAM_CHAT_ID"
+                "Telegram is not configured: TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID is missing"
             )
 
-        # Используем семафор для ограничения частоты отправки
+        # Use a semaphore to limit the sending rate
         self._rate_limiter.acquire()
 
         url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
-        payload = {"chat_id": self.chat_id, "text": message, "parse_mode": "HTML"}
+        payload = {
+            "chat_id": self.chat_id,
+            "text": message,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+        }
 
         response = requests.post(url, json=payload, timeout=10)
         if response.status_code == 400:
-            print(f"❌ Не удалось отправить сообщение в Telegram: {response.text}")
+            logger.error("Failed to send a Telegram message: %s", response.text)
         response.raise_for_status()
 
-        # Записываем факт отправки сообщения
+        # Record that the message was sent
         self._rate_limiter.record()
 
         return response.json()
 
 
 class Searcher:
-    """Класс для поиска курсов на сайте VHS."""
+    """Searches for courses on the VHS website."""
 
     def __init__(self):
         self.url_search = (
@@ -176,20 +197,20 @@ class Searcher:
         self.session = requests.Session()
 
     def _get_value(self, soup, name):
-        """Извлекает значение из input по имени."""
+        """Extracts the value of an input element by name."""
         tag = soup.find("input", {"name": name})
         return tag["value"] if tag and "value" in tag.attrs else ""
 
     def _extract_course_code(self, course_data):
-        """Извлекает код курса из данных курса (индекс 3)."""
+        """Extracts the course code from the course data (index 3)."""
         if len(course_data) > 3:
             code = course_data[3].strip()
             return code if code else None
         return None
 
     def search(self):
-        """Генератор, который возвращает найденные курсы."""
-        # 1. Загружаем страницу поиска
+        """Yields the courses found."""
+        # 1. Load the search page
         response = self.session.get(self.url_search)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
@@ -198,8 +219,8 @@ class Searcher:
         eventvalidation = self._get_value(soup, "__EVENTVALIDATION")
         viewstategen = self._get_value(soup, "__VIEWSTATEGENERATOR")
 
-        # 2. Активируем вкладку "Erweitert" (Расширенный поиск)
-        print("Активируем вкладку 'Erweitert'...")
+        # 2. Activate the "Erweitert" tab (advanced search)
+        logger.info("Activating the 'Erweitert' tab...")
         payload_tab = {
             "__VIEWSTATE": viewstate,
             "__VIEWSTATEGENERATOR": viewstategen,
@@ -230,9 +251,9 @@ class Searcher:
         viewstate = self._get_value(soup_tab, "__VIEWSTATE")
         eventvalidation = self._get_value(soup_tab, "__EVENTVALIDATION")
         viewstategen = self._get_value(soup_tab, "__VIEWSTATEGENERATOR")
-        print("Вкладка 'Erweitert' активирована")
+        logger.info("The 'Erweitert' tab is activated")
 
-        # 3. Формируем параметры поиска
+        # 3. Build the search parameters
         payload = {
             "__VIEWSTATE": viewstate,
             "__VIEWSTATEGENERATOR": viewstategen,
@@ -259,20 +280,20 @@ class Searcher:
             "ctl00$Content$CourseNumber1$searchBoxCourseNr$txtSearchTerm": "",
         }
 
-        # 4. Отправляем POST-запрос с параметрами расширенного поиска
-        print("Отправляем запрос расширенного поиска...")
+        # 4. Send a POST request with the advanced search parameters
+        logger.info("Sending an advanced search request...")
         result = self.session.post(self.url_search, data=payload)
         result.raise_for_status()
         soup_result = BeautifulSoup(result.text, "html.parser")
         with open("output.html", "w") as f:
             f.write(result.text)
 
-        # 5. Обрабатываем все страницы результатов
+        # 5. Process all result pages
         current_soup = soup_result
         page_num = 1
 
-        for page_num in range(1, 30):
-            # Извлекаем курсы с текущей страницы
+        for page_num in range(1, 3000):
+            # Extract courses from the current page
             page_courses = []
             for course in current_soup.select(
                 "#ctl00_Content_ILDataGrid1 tr.DataGridItem, #ctl00_Content_ILDataGrid1 tr.DataGridAlternatingItem"
@@ -280,7 +301,7 @@ class Searcher:
                 tds = course.find_all("td")
                 cols = [td.get_text(strip=True) for td in tds]
 
-                # Найти ссылку в колонке заголовка курса
+                # Find the link in the course title column
                 link = ""
                 for td in tds:
                     if "DataGridItemCourseTitle" in td.get("class", []):
@@ -288,7 +309,7 @@ class Searcher:
                         if a_tag:
                             link = a_tag["href"]
                         break
-                # Добавим ссылку как дополнительную колонку
+                # Append the link as an additional column
                 cols.append(link)
 
                 if cols:
@@ -296,15 +317,15 @@ class Searcher:
                     if code:
                         page_courses.append(cols)
                         yield cols
-            print(f"Страница {page_num}: найдено {len(page_courses)} курсов")
+            logger.info("Page %s: found %s courses", page_num, len(page_courses))
 
-            # Проверяем, есть ли кнопка "следующая страница" и не отключена ли она
+            # Check whether the next-page button exists and is enabled
             next_button = current_soup.find(
                 "input", {"name": lambda x: x and "ctl04" in x and "ILDataGrid1" in x}
             )
 
             if not next_button:
-                print("Кнопка следующей страницы не найдена")
+                logger.warning("Next-page button not found")
                 break
 
             button_class = next_button.get("class", [])
@@ -312,12 +333,12 @@ class Searcher:
                 button_class = button_class.split()
 
             if "aspNetDisabled" in button_class:
-                print("Достигнута последняя страница")
+                logger.info("Reached the last page")
                 break
 
             button_name = next_button.get("name")
             if not button_name:
-                print("Не удалось найти имя кнопки")
+                logger.error("Could not find the button name")
                 break
 
             viewstate_current = self._get_value(current_soup, "__VIEWSTATE")
@@ -342,13 +363,13 @@ class Searcher:
 
 
 class Service:
-    """Основной сервис для обработки курсов."""
+    """Main service for processing courses."""
 
     def __init__(self, telegram: Telegram, storage: CodeStorage, chunk=5):
         self.chunk = chunk
         self.storage = storage
         self.telegram = telegram
-        self.batch = []  # Батч новых курсов для отправки
+        self.batch = []  # Batch of new courses to send
         self.total_found = 0
         self.total_new = 0
 
@@ -356,18 +377,18 @@ class Service:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        """Сохраняет несохраненные элементы при выходе."""
-        self._save_batch()  # _save_batch() уже сохраняет коды на диск
+        """Saves pending items on exit."""
+        self._save_batch()  # _save_batch() already saves codes to disk
 
     def _extract_course_code(self, course_data):
-        """Извлекает код курса из данных курса (индекс 3)."""
+        """Extracts the course code from the course data (index 3)."""
         if len(course_data) > 3:
             code = course_data[3].strip()
             return code if code else None
         return None
 
     def _format_course_entry(self, course_data):
-        """Форматирует информацию об одном курсе для добавления в групповое сообщение."""
+        """Formats a single course for inclusion in a batch message."""
         if len(course_data) < 5:
             return None
 
@@ -380,83 +401,82 @@ class Service:
         price = course_data[8] if len(course_data) > 8 else "N/A"
         link = course_data[9] if len(course_data) > 9 else "N/A"
 
-        # Очищаем дату/время от \r\n
+        # Remove line breaks from the date/time: \r\n
         date_time = date_time.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
-
+        name = re.sub(r"([ABC][123](\.[0123])?\+?)", r"【<b>\1</b>】", name)
         entry = (
-            f"━━━━━━━━━━━━━━━\n"
-            f"<b>{name}</b>\n"
-            f"<i>Код:</i> {code}\n"
-            f"<i>Район:</i> {district}\n"
-            f"<i>Дата/Времяi</b> {date_time}\n"
-            f"<i>Места:</i> {places}\n"
-            f"<i>Ссылка:</i> https://www.vhsit.berlin.de/VHSKURSE/BusinessPages/{link}\n"
+            f"<u>{name}</u>\n\n"
+            f"<i>Code:</i> {code}\n"
+            f"<i>District:</i> {district}\n"
+            f"<i>Date/Time:</i> {date_time}\n"
+            f"<i>Places:</i> {places}\n"
+            f"<i>Link:</i> https://www.vhsit.berlin.de/VHSKURSE/BusinessPages/{link}\n"
         )
 
         if notes:
-            entry += f"<b>Примечания:</b> {notes}\n"
+            entry += f"<i>Notes:</i> {notes}\n"
 
-        entry += f"<b>Цена:</b> {price}"
+        entry += f"<i>Price:</i> {price}"
 
         return entry
 
     def _save_batch(self):
-        """Отправляет батч курсов в Telegram и сохраняет коды."""
+        """Sends a batch of courses to Telegram and saves their codes."""
         if not self.batch:
             return
 
-        # Формируем сообщение для батча
-        batch_message = f"<b>🆕 Найдено новых курсов: {len(self.batch)}</b>\n\n"
+        # Build the batch message
+        batch_message = f"<b>New courses found: {len(self.batch)}</b>\n\n"
 
         for idx, course_data in enumerate(self.batch, 1):
             course_entry = self._format_course_entry(course_data)
             if course_entry:
                 batch_message += course_entry
                 if idx < len(self.batch):
-                    batch_message += "\n\n"
+                    batch_message += "\n━━━━━━━━━━━━━\n\n"
 
-        # Отправляем сообщение (будет падать при ошибке)
+        # Send the message (raises an exception on failure)
         self.telegram.send(batch_message)
 
-        # Сохраняем коды в хранилище
+        # Save the codes in storage
         for course_data in self.batch:
             code = self._extract_course_code(course_data)
             if code:
                 self.storage.add(code)
 
-        # Сохраняем коды на диск сразу, чтобы избежать дубликатов
+        # Save codes to disk immediately to avoid duplicates
         self.storage.save()
 
-        print(f"✅ Отправлено уведомление о {len(self.batch)} новых курсах")
+        logger.info("Sent a notification about %s new courses", len(self.batch))
         self.batch = []
 
     def add(self, result):
-        """Добавляет результат курса. Проверяет существование, добавляет в батч, сохраняет при достижении chunk."""
+        """Adds a course result, checks whether it exists, and saves the batch when it reaches the chunk size."""
         self.total_found += 1
 
         code = self._extract_course_code(result)
         if not code:
             return
 
-        # Проверяем, существует ли код
+        # Check whether the code exists
         if self.storage.exists(code):
             return
 
-        # Добавляем в батч новых курсов
+        # Add to the batch of new courses
         self.batch.append(result)
         self.total_new += 1
 
-        # Если батч достиг размера chunk, сохраняем его
-        # Rate limiting обрабатывается в Telegram.send()
+        # Save the batch if it has reached the chunk size
+        # Rate limiting is handled by Telegram.send()
         if len(self.batch) >= self.chunk:
             self._save_batch()
 
 
 def main():
-    """Основная функция."""
+    """Main function."""
     telegram = Telegram()
     try:
-        print("🚀 Запуск мониторинга курсов VHS\n")
+        logger.info("Starting VHS course monitoring")
 
         storage = CodeStorage()
         found = 0
@@ -467,17 +487,17 @@ def main():
                 service.add(result)
                 found += 1
 
-        print("\n✅ Обработка завершена")
-        print(f"📊 Всего найдено курсов: {service.total_found}")
-        print(f"🆕 Новых курсов: {service.total_new}")
+        logger.info("Processing completed")
+        logger.info("Total courses found: %s", service.total_found)
+        logger.info("New courses: %s", service.total_new)
     except Exception as e:
         try:
-            telegram.send(f"❌ Ошибка: {e}")
+            telegram.send("Error!")
         except Exception as e:
-            print(f"❌ Ошибка при отправке сообщения в Telegram: {e}")
+            logger.error("Error sending a Telegram message: %s", e)
         raise e
     if not found:
-        telegram.send("❌ Не найдено курсов вообще!")
+        telegram.send("No courses found at all!")
 
 
 if __name__ == "__main__":

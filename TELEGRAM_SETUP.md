@@ -1,94 +1,93 @@
-# Настройка Telegram уведомлений
+# Setting up Telegram notifications
 
-## Что нужно получить:
+## What you need:
 
-### 1. Bot Token (токен бота)
+### 1. Bot token
 
-1. Откройте Telegram и найдите бота **@BotFather**
-2. Отправьте команду `/newbot`
-3. Следуйте инструкциям:
-   - Придумайте имя для бота (например: "VHS Course Monitor")
-   - Придумайте username для бота (должен заканчиваться на `bot`, например: `vhs_monitor_bot`)
-4. BotFather выдаст вам токен вида: `123456789:ABCdefGHIjklMNOpqrsTUVwxyz`
-5. **Сохраните этот токен!**
+1. Open Telegram and find **@BotFather**
+2. Send the `/newbot` command
+3. Follow the instructions:
+   - Choose a name for your bot (for example: "VHS Course Monitor")
+   - Choose a username for your bot (it must end in `bot`, for example: `vhs_monitor_bot`)
+4. BotFather will give you a token like this: `123456789:ABCdefGHIjklMNOpqrsTUVwxyz`
+5. **Save this token!**
 
-### 2. Chat ID (ID чата)
+### 2. Chat ID
 
-Есть несколько способов получить Chat ID:
+There are several ways to get a chat ID:
 
-#### Способ 1: Личные сообщения себе
-1. Найдите бота **@userinfobot** в Telegram
-2. Отправьте ему любое сообщение
-3. Он ответит с вашим Chat ID (число, например: `123456789`)
+#### Method 1: Direct messages to yourself
+1. Find **@userinfobot** in Telegram
+2. Send it any message
+3. It will reply with your chat ID (a number, for example: `123456789`)
 
-#### Способ 2: Через вашего бота
-1. Начните диалог с вашим ботом (найдите его по username)
-2. Отправьте боту любое сообщение (например: `/start`)
-3. Откройте в браузере: `https://api.telegram.org/bot<ВАШ_ТОКЕН>/getUpdates`
-   (замените `<ВАШ_ТОКЕН>` на токен от BotFather)
-4. Найдите в ответе поле `"chat":{"id":123456789}` - это ваш Chat ID
+#### Method 2: Through your bot
+1. Start a conversation with your bot (find it by its username)
+2. Send the bot any message (for example: `/start`)
+3. Open this URL in your browser: `https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates`
+   (replace `<YOUR_TOKEN>` with the token from BotFather)
+4. Find the `"chat":{"id":123456789}` field in the response — this is your chat ID
 
-#### Способ 3: Для группового чата
-1. Добавьте бота в группу
-2. Отправьте сообщение в группу
-3. Используйте тот же URL с getUpdates
-4. Найдите Chat ID группы (будет отрицательным числом, например: `-123456789`)
+#### Method 3: For a group chat
+1. Add the bot to the group
+2. Send a message to the group
+3. Use the same getUpdates URL
+4. Find the group's chat ID (it will be a negative number, for example: `-123456789`)
 
-## Как использовать:
+## How to use:
 
-### Вариант 1: Файл .env (рекомендуется) ⭐
+### Option 1: .env file (recommended) ⭐
 
-1. Установите зависимости (если еще не установлены):
+1. Install the dependencies (if they are not already installed):
 ```bash
 uv sync
-# или
+# or
 pip install python-dotenv
 ```
 
-2. Создайте файл `.env` в корне проекта:
+2. Create a `.env` file in the project root:
 ```bash
 touch .env
 ```
 
-3. Добавьте в файл `.env` следующие строки:
+3. Add the following lines to the `.env` file:
 ```
-TELEGRAM_BOT_TOKEN=ваш_токен_от_BotFather
-TELEGRAM_CHAT_ID=ваш_chat_id
+TELEGRAM_BOT_TOKEN=your_token_from_BotFather
+TELEGRAM_CHAT_ID=your_chat_id
 ```
 
-4. Запустите скрипт:
+4. Run the script:
 ```bash
 python main.py
 ```
 
-Скрипт автоматически загрузит переменные из `.env` файла.
+The script will automatically load the variables from the `.env` file.
 
-**Важно:** Файл `.env` уже добавлен в `.gitignore` и не будет загружен в репозиторий.
+**Important:** The `.env` file is already listed in `.gitignore` and will not be uploaded to the repository.
 
-### Вариант 2: Переменные окружения
+### Option 2: Environment variables
 
 ```bash
-export TELEGRAM_BOT_TOKEN="ваш_токен_от_BotFather"
-export TELEGRAM_CHAT_ID="ваш_chat_id"
+export TELEGRAM_BOT_TOKEN="your_token_from_BotFather"
+export TELEGRAM_CHAT_ID="your_chat_id"
 python main.py
 ```
 
-### Вариант 3: В коде (не рекомендуется для продакшена)
+### Option 3: In code (not recommended for production)
 
-Можно передать токен и chat_id напрямую в функцию:
+You can pass the token and chat_id directly to the function:
 ```python
-send_telegram_message("Сообщение", bot_token="ваш_токен", chat_id="ваш_chat_id")
+send_telegram_message("Message", bot_token="your_token", chat_id="your_chat_id")
 ```
 
-## Проверка работы
+## Verifying the setup
 
-После настройки запустите скрипт. Если все настроено правильно, вы увидите:
+After configuring everything, run the script. If everything is set up correctly, you will see:
 ```
-✅ Сообщение отправлено в Telegram
-```
-
-Если что-то не так:
-```
-⚠️  Telegram не настроен: отсутствует TELEGRAM_BOT_TOKEN или TELEGRAM_CHAT_ID
+✅ Message sent to Telegram
 ```
 
+If something is wrong:
+```
+⚠️  Telegram is not configured: TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID is missing
+```
